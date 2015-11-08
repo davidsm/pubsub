@@ -75,7 +75,7 @@ impl MessageBuilder {
             return Err(MessageBuildError::MissingField(missing_fields.join(", ")));
         }
 
-        if self.event_name.as_ref().unwrap().len() as u16 > u8::MAX as u16 {
+        if self.event_name.as_ref().unwrap().len() > u8::MAX as usize {
             return Err(MessageBuildError::TooLargeField(String::from("event name")));
         }
 
@@ -84,7 +84,7 @@ impl MessageBuilder {
                 if self.payload.is_none() {
                     return Err(MessageBuildError::MissingField(String::from("payload")));
                 }
-                if self.payload.as_ref().unwrap().len() as u32 > u16::MAX as u32 {
+                if self.payload.as_ref().unwrap().len() > u16::MAX as usize {
                     return Err(MessageBuildError::TooLargeField(String::from("payload")));
                 }
             },

@@ -118,11 +118,25 @@ impl<'a> Parser {
                         let message = try_parse!(self.complete_parse());
                         return ParseResult::Completed(message, remainder);
                     }
+                },
+                Awaiting::PayloadLen => {
+                    let (len, rest) = try_parse!(read_u16(remainder)
+                                                 .ok_or(ParserError::InsufficientData));
+                    self.expected_payload_len = Some(len);
+                    self.awaiting = Awaiting::Payload;
+                    remainder = rest;
+                },
+                Awaiting::Payload => {
+                    assert!(self.expected_payload_len.is_some());
+                    let (payload_bytes, rest) = try_parse!(
+                        take_n(self.expected_payload_len.unwrap() as usize, remainder)
+                            .ok_or(ParserError::InsufficientData));
+                    self.partial_message.payload(payload_bytes.to_vec());
+                    let message = try_parse!(self.complete_parse());
+                    return ParseResult::Completed(message, rest);
                 }
-                _ => {}
             };
         }
-
         ParseResult::Incomplete
     }
 
@@ -252,5 +266,34 @@ mod test {
         let res = p.feed(&bytes);
         assert_eq!(p.awaiting, Awaiting::EventNameLen);
         assert_eq!(res, ParseResult::Incomplete);
+    }
+
+    #[test]
+    fn test_parse_complete_message() {
+        let message_bytes = vec![
+            0x03, // Type (Publish)
+            0x05, // Name length
+            0x65, 0x76, 0x65, 0x6e, 0x74, // Name (event)
+            0x00, 0x0E, // Payload length
+            0x61, 0x20, 0x70, 0x61, 0x79,// Payload (a payload here)
+            0x6c, 0x6f, 0x61, 0x64, 0x20,
+            0x68, 0x65, 0x72, 0x65
+                ];
+        let mut p = Parser::new();
+        let res = p.feed(&message_bytes);
+        assert!(res != ParseResult::Incomplete);
+        assert!(res != ParseResult::Error);
+        if let ParseResult::Completed(message, remainder) = res {
+            assert_eq!(message.message_type, MessageType::Publish);
+            assert_eq!(message.event_name, "event".to_string());
+            let expected_payload: Vec<u8> = vec![0x61, 0x20, 0x70, 0x61, 0x79,
+                                                 0x6c, 0x6f, 0x61, 0x64, 0x20,
+                                                 0x68, 0x65, 0x72, 0x65];
+            assert_eq!(message.payload, Some(expected_payload));
+            assert_eq!(remainder.len(), 0);
+        }
+        else {
+            assert!(false, "Result wasn't Completed");
+        }
     }
 }

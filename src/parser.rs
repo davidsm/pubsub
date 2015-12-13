@@ -42,14 +42,14 @@ pub fn read_u16(b: &[u8]) -> Option<(u16, &[u8])> {
 #[derive(PartialEq, Debug)]
 pub enum ParseResult<'a> {
     Completed(Message, &'a [u8]),
-    Incomplete,
+    Incomplete(&'a [u8]),
     Error
 }
 
-impl<'a> From<ParserError> for ParseResult<'a> {
-    fn from(err: ParserError) -> ParseResult<'a> {
+impl<'a> From<ParserError<'a>> for ParseResult<'a> {
+    fn from(err: ParserError<'a>) -> ParseResult<'a> {
         match err {
-            ParserError::InsufficientData => ParseResult::Incomplete,
+            ParserError::InsufficientData(rest) => ParseResult::Incomplete(rest),
             ParserError::InvalidValue => ParseResult::Error
         }
     }
@@ -65,8 +65,8 @@ enum Awaiting {
 }
 
 #[derive(PartialEq, Debug)]
-pub enum ParserError {
-    InsufficientData,
+pub enum ParserError<'a> {
+    InsufficientData(&'a [u8]),
     InvalidValue
 }
 
@@ -102,7 +102,7 @@ impl<'a> Parser {
                 },
                 Awaiting::EventNameLen => {
                     let (len, rest) = try_parse!(read_u8(remainder)
-                                                 .ok_or(ParserError::InsufficientData));
+                                                 .ok_or(ParserError::InsufficientData(remainder)));
                     self.expected_event_name_len = Some(len);
                     self.awaiting = Awaiting::EventName;
                     remainder = rest;
@@ -121,7 +121,7 @@ impl<'a> Parser {
                 },
                 Awaiting::PayloadLen => {
                     let (len, rest) = try_parse!(read_u16(remainder)
-                                                 .ok_or(ParserError::InsufficientData));
+                                                 .ok_or(ParserError::InsufficientData(remainder)));
                     self.expected_payload_len = Some(len);
                     self.awaiting = Awaiting::Payload;
                     remainder = rest;
@@ -130,17 +130,17 @@ impl<'a> Parser {
                     assert!(self.expected_payload_len.is_some());
                     let (payload_bytes, rest) = try_parse!(
                         take_n(self.expected_payload_len.unwrap() as usize, remainder)
-                            .ok_or(ParserError::InsufficientData));
+                            .ok_or(ParserError::InsufficientData(remainder)));
                     self.partial_message.payload(payload_bytes.to_vec());
                     let message = try_parse!(self.complete_parse());
                     return ParseResult::Completed(message, rest);
                 }
             };
         }
-        ParseResult::Incomplete
+        ParseResult::Incomplete(remainder)
     }
 
-    fn complete_parse(&mut self) -> Result<Message, ParserError> {
+    fn complete_parse<'b>(&mut self) -> Result<Message, ParserError<'b>> {
         let partial_message = mem::replace(&mut self.partial_message, MessageBuilder::new());
         self.awaiting = Awaiting::MessageType;
         self.current_message_type = None;
@@ -152,7 +152,7 @@ impl<'a> Parser {
         Ok(message)
     }
 
-    fn match_message_type(&self, val: u8) -> Result<MessageType, ParserError> {
+    fn match_message_type<'b>(&self, val: u8) -> Result<MessageType, ParserError<'b>> {
         // Need to use clunky if statements here,
         // as match doesn't allow you to cast the enum value
         if val == MessageType::Subscribe as u8 {
@@ -173,21 +173,21 @@ impl<'a> Parser {
     }
 
     fn read_message_type<'b>(&self, b: &'b [u8])
-                             -> Result<(MessageType, &'b [u8]), ParserError> {
+                             -> Result<(MessageType, &'b [u8]), ParserError<'b>> {
         match read_u8(b) {
             Some((val, remainder)) => {
                 let message_type = try!(self.match_message_type(val));
                 Ok((message_type, remainder))
             },
-            None => Err(ParserError::InsufficientData)
+            None => Err(ParserError::InsufficientData(b))
         }
     }
 
     fn read_event_name<'b>(&self, b: &'b [u8])
-                           -> Result<(String, &'b [u8]), ParserError> {
+                           -> Result<(String, &'b [u8]), ParserError<'b>> {
         assert!(self.expected_event_name_len.is_some());
         let (event_name_bytes, rest) = try!(take_n(self.expected_event_name_len.unwrap() as usize, b)
-                                            .ok_or(ParserError::InsufficientData));
+                                            .ok_or(ParserError::InsufficientData(b)));
         let event_name = try!(str::from_utf8(event_name_bytes)
                               .or(Err(ParserError::InvalidValue))).to_string();
         Ok((event_name, rest))
@@ -265,7 +265,7 @@ mod test {
         let mut p = Parser::new();
         let res = p.feed(&bytes);
         assert_eq!(p.awaiting, Awaiting::EventNameLen);
-        assert_eq!(res, ParseResult::Incomplete);
+        assert_eq!(res, ParseResult::Incomplete(&[]));
     }
 
     #[test]
@@ -281,8 +281,6 @@ mod test {
                 ];
         let mut p = Parser::new();
         let res = p.feed(&message_bytes);
-        assert!(res != ParseResult::Incomplete);
-        assert!(res != ParseResult::Error);
         if let ParseResult::Completed(message, remainder) = res {
             assert_eq!(message.message_type, MessageType::Publish);
             assert_eq!(message.event_name, "event".to_string());

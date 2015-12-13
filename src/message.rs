@@ -22,9 +22,9 @@ impl MessageType {
 
 #[derive(PartialEq, Debug)]
 pub struct Message {
-    message_type: MessageType,
-    event_name: String,
-    payload: Option<Vec<u8>>
+    pub message_type: MessageType,
+    pub event_name: String,
+    pub payload: Option<Vec<u8>>
 }
 
 impl Message {

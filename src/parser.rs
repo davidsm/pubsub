@@ -1,5 +1,7 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io;
+use std::str;
+use std::mem;
 
 use message::{MessageBuilder, Message, MessageType};
 
@@ -70,31 +72,70 @@ pub enum ParserError {
 
 pub struct Parser {
     awaiting: Awaiting,
-    partial_message: MessageBuilder
+    partial_message: MessageBuilder,
+    current_message_type: Option<MessageType>,
+    expected_event_name_len: Option<u8>,
+    expected_payload_len: Option<u16>
 }
 
 impl<'a> Parser {
     pub fn new() -> Parser {
         Parser {
             awaiting: Awaiting::MessageType,
-            partial_message: MessageBuilder::new()
+            partial_message: MessageBuilder::new(),
+            current_message_type: None,
+            expected_event_name_len: None,
+            expected_payload_len: None
         }
     }
 
-    pub fn feed(&mut self, data: &[u8]) -> ParseResult<'a> {
+    pub fn feed(&mut self, data: &'a [u8]) -> ParseResult<'a> {
         let mut remainder = data;
-        match self.awaiting {
-            Awaiting::MessageType => {
-                let (message_type, rest) = try_parse!(self.read_message_type(remainder));
-
-                self.partial_message.message_type(message_type);
-                self.awaiting = Awaiting::EventNameLen;
-                remainder = rest;
-            },
-            _ => {}
-        };
+        while remainder.len() > 0 {
+            match self.awaiting {
+                Awaiting::MessageType => {
+                    let (message_type, rest) = try_parse!(self.read_message_type(remainder));
+                    self.partial_message.message_type(message_type);
+                    self.current_message_type = Some(message_type);
+                    self.awaiting = Awaiting::EventNameLen;
+                    remainder = rest;
+                },
+                Awaiting::EventNameLen => {
+                    let (len, rest) = try_parse!(read_u8(remainder)
+                                                 .ok_or(ParserError::InsufficientData));
+                    self.expected_event_name_len = Some(len);
+                    self.awaiting = Awaiting::EventName;
+                    remainder = rest;
+                },
+                Awaiting::EventName => {
+                    let (event_name, rest) = try_parse!(self.read_event_name(remainder));
+                    self.partial_message.event_name(event_name);
+                    remainder = rest;
+                    if self.current_message_type.unwrap().expects_payload() {
+                        self.awaiting = Awaiting::PayloadLen;
+                    }
+                    else {
+                        let message = try_parse!(self.complete_parse());
+                        return ParseResult::Completed(message, remainder);
+                    }
+                }
+                _ => {}
+            };
+        }
 
         ParseResult::Incomplete
+    }
+
+    fn complete_parse(&mut self) -> Result<Message, ParserError> {
+        let partial_message = mem::replace(&mut self.partial_message, MessageBuilder::new());
+        self.awaiting = Awaiting::MessageType;
+        self.current_message_type = None;
+        self.expected_event_name_len = None;
+        self.expected_payload_len = None;
+
+        let message = try!(partial_message.build()
+                           .or(Err(ParserError::InvalidValue)));
+        Ok(message)
     }
 
     fn match_message_type(&self, val: u8) -> Result<MessageType, ParserError> {
@@ -126,6 +167,17 @@ impl<'a> Parser {
             },
             None => Err(ParserError::InsufficientData)
         }
+    }
+
+    fn read_event_name<'b>(&self, b: &'b [u8])
+                           -> Result<(String, &'b [u8]), ParserError> {
+        assert!(self.expected_event_name_len.is_some());
+        let (event_name_bytes, rest) = try!(take_n(self.expected_event_name_len.unwrap() as usize, b)
+                                            .ok_or(ParserError::InsufficientData));
+        let event_name = try!(str::from_utf8(event_name_bytes)
+                              .or(Err(ParserError::InvalidValue))).to_string();
+        Ok((event_name, rest))
+
     }
 }
 

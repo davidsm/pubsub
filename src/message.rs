@@ -3,12 +3,21 @@ use std::u16;
 
 use byteorder::{BigEndian, WriteBytesExt};
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum MessageType {
     Subscribe = 1,
     Unsubscribe,
     Publish,
     Event
+}
+
+impl MessageType {
+    pub fn expects_payload(&self) -> bool {
+        match *self {
+            MessageType::Subscribe | MessageType::Unsubscribe => false,
+            MessageType::Publish | MessageType::Event => true
+        }
+    }
 }
 
 #[derive(PartialEq, Debug)]

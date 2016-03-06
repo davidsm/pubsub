@@ -42,6 +42,7 @@ impl Message {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub struct MessageBuilder {
     message_type: Option<MessageType>,
     event_name: Option<String>,

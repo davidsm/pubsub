@@ -1,9 +1,8 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io;
 use std::str;
-use std::mem;
 
-use message::{MessageBuilder, Message, MessageType};
+use message::{MessageBuilder, MessageType};
 
 macro_rules! try_parse {
     ($expr:expr) => (match $expr {
@@ -40,16 +39,16 @@ pub fn read_u16(b: &[u8]) -> Option<(u16, &[u8])> {
 }
 
 #[derive(PartialEq, Debug)]
-pub enum ParseResult<'a> {
-    Completed(Message, &'a [u8]),
-    Incomplete(&'a [u8]),
+pub enum ParseResult {
+    Completed(MessageBuilder, usize, u16),
+    Incomplete,
     Error
 }
 
-impl<'a> From<ParserError<'a>> for ParseResult<'a> {
-    fn from(err: ParserError<'a>) -> ParseResult<'a> {
+impl From<ParserError> for ParseResult {
+    fn from(err: ParserError) -> ParseResult {
         match err {
-            ParserError::InsufficientData(rest) => ParseResult::Incomplete(rest),
+            ParserError::InsufficientData => ParseResult::Incomplete,
             ParserError::InvalidValue => ParseResult::Error
         }
     }
@@ -60,145 +59,115 @@ enum Awaiting {
     MessageType,
     EventNameLen,
     EventName,
-    PayloadLen,
-    Payload
+    PayloadLen
 }
 
 #[derive(PartialEq, Debug)]
-pub enum ParserError<'a> {
-    InsufficientData(&'a [u8]),
+pub enum ParserError {
+    InsufficientData,
     InvalidValue
 }
 
-pub struct Parser {
-    awaiting: Awaiting,
-    partial_message: MessageBuilder,
-    current_message_type: Option<MessageType>,
-    expected_event_name_len: Option<u8>,
-    expected_payload_len: Option<u16>
-}
 
-impl<'a> Parser {
-    pub fn new() -> Parser {
-        Parser {
-            awaiting: Awaiting::MessageType,
-            partial_message: MessageBuilder::new(),
-            current_message_type: None,
-            expected_event_name_len: None,
-            expected_payload_len: None
-        }
-    }
+pub fn parse(data: &[u8]) -> ParseResult {
+    let mut awaiting = Awaiting::MessageType;
+    let mut partial_message = MessageBuilder::new();
 
-    pub fn feed(&mut self, data: &'a [u8]) -> ParseResult<'a> {
-        let mut remainder = data;
-        while remainder.len() > 0 {
-            match self.awaiting {
-                Awaiting::MessageType => {
-                    let (message_type, rest) = try_parse!(self.read_message_type(remainder));
-                    self.partial_message.message_type(message_type);
-                    self.current_message_type = Some(message_type);
-                    self.awaiting = Awaiting::EventNameLen;
-                    remainder = rest;
-                },
-                Awaiting::EventNameLen => {
-                    let (len, rest) = try_parse!(read_u8(remainder)
-                                                 .ok_or(ParserError::InsufficientData(remainder)));
-                    self.expected_event_name_len = Some(len);
-                    self.awaiting = Awaiting::EventName;
-                    remainder = rest;
-                },
-                Awaiting::EventName => {
-                    let (event_name, rest) = try_parse!(self.read_event_name(remainder));
-                    self.partial_message.event_name(event_name);
-                    remainder = rest;
-                    if self.current_message_type.unwrap().expects_payload() {
-                        self.awaiting = Awaiting::PayloadLen;
-                    }
-                    else {
-                        let message = try_parse!(self.complete_parse());
-                        return ParseResult::Completed(message, remainder);
-                    }
-                },
-                Awaiting::PayloadLen => {
-                    let (len, rest) = try_parse!(read_u16(remainder)
-                                                 .ok_or(ParserError::InsufficientData(remainder)));
-                    self.expected_payload_len = Some(len);
-                    self.awaiting = Awaiting::Payload;
-                    remainder = rest;
-                },
-                Awaiting::Payload => {
-                    assert!(self.expected_payload_len.is_some());
-                    let (payload_bytes, rest) = try_parse!(
-                        take_n(self.expected_payload_len.unwrap() as usize, remainder)
-                            .ok_or(ParserError::InsufficientData(remainder)));
-                    self.partial_message.payload(payload_bytes.to_vec());
-                    let message = try_parse!(self.complete_parse());
-                    return ParseResult::Completed(message, rest);
-                }
-            };
-        }
-        ParseResult::Incomplete(remainder)
-    }
+    let mut current_message_type = None;
+    let mut expected_event_name_len = None;
 
-    fn complete_parse<'b>(&mut self) -> Result<Message, ParserError<'b>> {
-        let partial_message = mem::replace(&mut self.partial_message, MessageBuilder::new());
-        self.awaiting = Awaiting::MessageType;
-        self.current_message_type = None;
-        self.expected_event_name_len = None;
-        self.expected_payload_len = None;
+    let mut consumed: usize = 0;
 
-        let message = try!(partial_message.build()
-                           .or(Err(ParserError::InvalidValue)));
-        Ok(message)
-    }
+    let mut remainder = data;
 
-    fn match_message_type<'b>(&self, val: u8) -> Result<MessageType, ParserError<'b>> {
-        // Need to use clunky if statements here,
-        // as match doesn't allow you to cast the enum value
-        if val == MessageType::Subscribe as u8 {
-            Ok(MessageType::Subscribe)
-        }
-        else if val == MessageType::Unsubscribe as u8 {
-            Ok(MessageType::Unsubscribe)
-        }
-        else if val == MessageType::Publish as u8 {
-            Ok(MessageType::Publish)
-        }
-        else if val == MessageType::Event as u8 {
-            Ok(MessageType::Event)
-        }
-        else {
-            Err(ParserError::InvalidValue)
-        }
-    }
-
-    fn read_message_type<'b>(&self, b: &'b [u8])
-                             -> Result<(MessageType, &'b [u8]), ParserError<'b>> {
-        match read_u8(b) {
-            Some((val, remainder)) => {
-                let message_type = try!(self.match_message_type(val));
-                Ok((message_type, remainder))
+    while remainder.len() > 0 {
+        match awaiting {
+            Awaiting::MessageType => {
+                let (message_type, rest) = try_parse!(read_message_type(remainder));
+                partial_message.message_type(message_type);
+                current_message_type = Some(message_type);
+                awaiting = Awaiting::EventNameLen;
+                consumed += remainder.len() - rest.len();
+                remainder = rest;
             },
-            None => Err(ParserError::InsufficientData(b))
-        }
+            Awaiting::EventNameLen => {
+                let (len, rest) = try_parse!(read_u8(remainder)
+                                             .ok_or(ParseResult::Incomplete));
+                expected_event_name_len = Some(len);
+                awaiting = Awaiting::EventName;
+                consumed += remainder.len() - rest.len();
+                remainder = rest;
+            },
+            Awaiting::EventName => {
+                let (event_name, rest) = try_parse!(read_event_name(
+                    remainder, expected_event_name_len.unwrap()));
+                partial_message.event_name(event_name);
+                consumed += remainder.len() - rest.len();
+                remainder = rest;
+                if current_message_type.unwrap().expects_payload() {
+                    awaiting = Awaiting::PayloadLen;
+                }
+                else {
+                    return ParseResult::Completed(partial_message, consumed, 0);
+                }
+            },
+            Awaiting::PayloadLen => {
+                let (len, rest) = try_parse!(read_u16(remainder)
+                                             .ok_or(ParseResult::Incomplete));
+                consumed += remainder.len() - rest.len();
+                return ParseResult::Completed(partial_message, consumed, len);
+            }
+        };
     }
+    ParseResult::Incomplete
+}
 
-    fn read_event_name<'b>(&self, b: &'b [u8])
-                           -> Result<(String, &'b [u8]), ParserError<'b>> {
-        assert!(self.expected_event_name_len.is_some());
-        let (event_name_bytes, rest) = try!(take_n(self.expected_event_name_len.unwrap() as usize, b)
-                                            .ok_or(ParserError::InsufficientData(b)));
-        let event_name = try!(str::from_utf8(event_name_bytes)
-                              .or(Err(ParserError::InvalidValue))).to_string();
-        Ok((event_name, rest))
-
+fn read_message_type<'b>(b: &'b [u8])
+                         -> Result<(MessageType, &'b [u8]), ParserError> {
+    match read_u8(b) {
+        Some((val, remainder)) => {
+            let message_type = try!(match_message_type(val));
+            Ok((message_type, remainder))
+        },
+        None => Err(ParserError::InsufficientData)
     }
 }
+
+fn match_message_type(val: u8) -> Result<MessageType, ParserError> {
+    // Need to use clunky if statements here,
+    // as match doesn't allow you to cast the enum value
+    if val == MessageType::Subscribe as u8 {
+        Ok(MessageType::Subscribe)
+    }
+    else if val == MessageType::Unsubscribe as u8 {
+        Ok(MessageType::Unsubscribe)
+    }
+    else if val == MessageType::Publish as u8 {
+        Ok(MessageType::Publish)
+    }
+    else if val == MessageType::Event as u8 {
+        Ok(MessageType::Event)
+    }
+    else {
+        Err(ParserError::InvalidValue)
+    }
+}
+
+fn read_event_name<'b>(b: &'b [u8], event_name_len: u8)
+                       -> Result<(String, &'b [u8]), ParserError> {
+    let (event_name_bytes, rest) = try!(take_n(event_name_len as usize, b)
+                                        .ok_or(ParserError::InsufficientData));
+    let event_name = try!(str::from_utf8(event_name_bytes)
+                          .or(Err(ParserError::InvalidValue))).to_string();
+    Ok((event_name, rest))
+
+}
+
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::{Awaiting};
+    use super::match_message_type;
     use message::MessageType;
     use std::borrow::Borrow;
 
@@ -248,28 +217,95 @@ mod test {
 
     #[test]
     fn test_match_message_type() {
-        let p = Parser::new();
         let expected_pairs = vec![(1, MessageType::Subscribe),
                                   (2, MessageType::Unsubscribe),
                                   (3, MessageType::Publish),
                                   (4, MessageType::Event)];
         for (val, message_type) in expected_pairs {
-            assert_eq!(p.match_message_type(val), Ok(message_type));
+            assert_eq!(match_message_type(val), Ok(message_type));
         }
-        assert_eq!(p.match_message_type(5), Err(ParserError::InvalidValue));
+        assert_eq!(match_message_type(5), Err(ParserError::InvalidValue));
+    }
+
+    fn test_parse_message_without_payload(bytes: &[u8], expected_type: MessageType, expected_event_name: String,
+                                          expected_consumed: usize) {
+        let res = parse(&bytes);
+        if let ParseResult::Completed(message_builder, consumed, payload_len) = res {
+            assert_eq!(consumed, expected_consumed);
+            assert_eq!(payload_len, 0);
+
+            let build_result = message_builder.build();
+            assert!(build_result.is_ok());
+
+            let message = build_result.unwrap();
+            assert_eq!(message.event_name, expected_event_name);
+            assert_eq!(message.message_type, expected_type);
+        }
+        else {
+            assert!(false, "Result wasn't Completed");
+        }
+
     }
 
     #[test]
-    fn test_read_message_type() {
-        let bytes = [MessageType::Subscribe as u8];
-        let mut p = Parser::new();
-        let res = p.feed(&bytes);
-        assert_eq!(p.awaiting, Awaiting::EventNameLen);
-        assert_eq!(res, ParseResult::Incomplete(&[]));
+    fn test_parse_incomplete_message() {
+        let message_bytes = vec![
+            0x01, // Type (Subscribe)
+            0x05, // Name length
+            0x65, 0x76, 0x65, 0x6e // Name (even; missing one byte)
+                ];
+        let res = parse(&message_bytes);
+        assert_eq!(res, ParseResult::Incomplete);
     }
 
     #[test]
-    fn test_parse_complete_message() {
+    fn test_parse_complete_message_without_payload() {
+        let message_bytes = vec![
+            0x01, // Type (Subscribe)
+            0x05, // Name length
+            0x65, 0x76, 0x65, 0x6e, 0x74, // Name (event)
+            ];
+        test_parse_message_without_payload(&message_bytes, MessageType::Subscribe, "event".to_string(),
+                                           7);
+    }
+
+    #[test]
+    fn test_parse_complete_message_without_payload_with_overflow() {
+        let message_bytes = vec![
+            0x01, // Type (Subscribe)
+            0x05, // Name length
+            0x65, 0x76, 0x65, 0x6e, 0x74, // Name (event)
+            0x10, 0x20 // Extra bytes
+            ];
+        test_parse_message_without_payload(&message_bytes, MessageType::Subscribe, "event".to_string(),
+                                           7);
+    }
+
+    fn test_parse_message_with_payload(bytes: &[u8], expected_type: MessageType, expected_event_name: String,
+                                       expected_payload: &[u8], expected_consumed: usize) {
+        let res = parse(bytes);
+        if let ParseResult::Completed(mut message_builder, consumed, payload_len) = res {
+            assert_eq!(consumed, expected_consumed);
+            assert_eq!(payload_len as usize, expected_payload.len());
+
+            let payload_bytes = &bytes[consumed..consumed + payload_len as usize];
+            assert_eq!(payload_bytes, expected_payload);
+
+            message_builder.payload(payload_bytes.to_owned());
+            let build_result = message_builder.build();
+            assert!(build_result.is_ok());
+
+            let message = build_result.unwrap();
+            assert_eq!(message.message_type, expected_type);
+            assert_eq!(message.event_name, expected_event_name);
+        }
+        else {
+            assert!(false, "Result wasn't Completed");
+        }
+    }
+
+    #[test]
+    fn test_parse_complete_message_with_payload() {
         let message_bytes = vec![
             0x03, // Type (Publish)
             0x05, // Name length
@@ -279,19 +315,31 @@ mod test {
             0x6c, 0x6f, 0x61, 0x64, 0x20,
             0x68, 0x65, 0x72, 0x65
                 ];
-        let mut p = Parser::new();
-        let res = p.feed(&message_bytes);
-        if let ParseResult::Completed(message, remainder) = res {
-            assert_eq!(message.message_type, MessageType::Publish);
-            assert_eq!(message.event_name, "event".to_string());
-            let expected_payload: Vec<u8> = vec![0x61, 0x20, 0x70, 0x61, 0x79,
-                                                 0x6c, 0x6f, 0x61, 0x64, 0x20,
-                                                 0x68, 0x65, 0x72, 0x65];
-            assert_eq!(message.payload, Some(expected_payload));
-            assert_eq!(remainder.len(), 0);
-        }
-        else {
-            assert!(false, "Result wasn't Completed");
-        }
+        let expected_payload: Vec<u8> = vec![0x61, 0x20, 0x70, 0x61, 0x79,
+                                             0x6c, 0x6f, 0x61, 0x64, 0x20,
+                                             0x68, 0x65, 0x72, 0x65];
+        test_parse_message_with_payload(&message_bytes, MessageType::Publish, "event".to_string(),
+                                        &expected_payload, 9);
+    }
+
+    #[test]
+    fn test_parse_complete_message_with_payload_with_overflow() {
+        let message_bytes = vec![
+            0x03, // Type (Publish)
+            0x05, // Name length
+            0x65, 0x76, 0x65, 0x6e, 0x74, // Name (event)
+            0x00, 0x0E, // Payload length
+            0x61, 0x20, 0x70, 0x61, 0x79,// Payload (a payload here)
+            0x6c, 0x6f, 0x61, 0x64, 0x20,
+            0x68, 0x65, 0x72, 0x65,
+            0x01, 0xAA, 0xBB // Extra bytes
+                ];
+        let expected_payload: Vec<u8> = vec![0x61, 0x20, 0x70, 0x61, 0x79,
+                                             0x6c, 0x6f, 0x61, 0x64, 0x20,
+                                             0x68, 0x65, 0x72, 0x65];
+
+        test_parse_message_with_payload(&message_bytes, MessageType::Publish, "event".to_string(),
+                                        &expected_payload, 9);
+
     }
 }

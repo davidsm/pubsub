@@ -1,0 +1,10 @@
+[package]
+name = "pubsub-server"
+version = "0.1.0"
+authors = ["david <david.smitmanis@gmail.com>"]
+
+[dependencies.pubsub]
+path = "../"
+
+[dependencies.mio]
+version = "0.5"

@@ -1,63 +1,42 @@
-use mio::tcp::{TcpListener, TcpStream};
+use mio::tcp::{TcpListener};
 use mio::util::Slab;
-use mio::{EventSet, PollOpt, TryRead};
+use mio::{EventSet, PollOpt};
 use mio;
 
-use std::str;
+use client::{PubsubClient, ClientAction};
 
-const SERVER: mio::Token = mio::Token(0);
+use subscriptions::SubscriptionMap;
 
-struct PubsubClient {
-    socket: TcpStream,
-    token: mio::Token
-}
+const SERVER_TOKEN: mio::Token = mio::Token(0);
 
-impl PubsubClient {
-    pub fn new(socket: TcpStream, token: mio::Token) -> PubsubClient {
-        PubsubClient {
-            socket: socket,
-            token: token
-        }
-    }
-
-    pub fn socket(&self) -> &TcpStream {
-        &self.socket
-    }
-
-    pub fn ready(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>) {
-        let mut buf = [0; 128];
-        match self.socket.try_read(&mut buf) {
-            Ok(Some(len)) => println!("{:?}", str::from_utf8(&buf[..len]).unwrap()),
-            Ok(None) => println!("Got None while reading"),
-            Err(e) => println!("{}", e)
-        }
-        event_loop.reregister(&self.socket, self.token, EventSet::readable(),
-                              PollOpt::edge() | PollOpt::oneshot()).unwrap();
-    }
-}
-
-pub struct PubsubServer {
+pub struct PubsubServer<'a> {
     socket: TcpListener,
-    connections: Slab<PubsubClient>
+    connections: Slab<PubsubClient>,
+    subscriptions: SubscriptionMap<'a>
 }
 
-impl PubsubServer {
-    pub fn new(socket: TcpListener) -> PubsubServer {
+impl<'a> PubsubServer<'a> {
+    pub fn new(socket: TcpListener, subscription_map: SubscriptionMap) -> PubsubServer {
         PubsubServer {
             socket: socket,
-            connections: Slab::new_starting_at(mio::Token(1), 128)
+            connections: Slab::new_starting_at(mio::Token(1), 128),
+            subscriptions: subscription_map
         }
+    }
+
+    pub fn token() -> mio::Token {
+        SERVER_TOKEN
     }
 }
 
-impl mio::Handler for PubsubServer {
+impl<'a> mio::Handler for PubsubServer<'a> {
     type Timeout = ();
     type Message = ();
 
     fn ready(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>,
              token: mio::Token, events: mio::EventSet) {
         match token {
-            SERVER => {
+            SERVER_TOKEN => {
                 let client_socket = match self.socket.accept() {
                     Err(e) => {
                         println!("{}", e);
@@ -85,7 +64,10 @@ impl mio::Handler for PubsubServer {
             },
 
             _ => {
-                self.connections[token].ready(event_loop);
+                match self.connections[token].read(event_loop) {
+                    ClientAction::Nothing => {},
+                    _ => unimplemented!()
+                }
             }
         }
     }

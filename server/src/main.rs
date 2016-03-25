@@ -2,7 +2,7 @@ extern crate pubsub;
 extern crate mio;
 
 mod server;
-use server::PubsubServer;
+use server::{PubsubServer, SERVER_TOKEN};
 
 mod subscriptions;
 use subscriptions::SubscriptionMap;
@@ -20,6 +20,6 @@ fn main() {
     let listener = TcpListener::bind(&bind_address).unwrap();
 
     let mut event_loop = EventLoop::new().unwrap();
-    event_loop.register(&listener, PubsubServer::token(), EventSet::readable(), PollOpt::edge()).unwrap();
+    event_loop.register(&listener, SERVER_TOKEN, EventSet::readable(), PollOpt::edge()).unwrap();
     event_loop.run(&mut PubsubServer::new(listener, subscription_map)).unwrap();
 }

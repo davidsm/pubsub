@@ -7,7 +7,7 @@ use client::{PubsubClient, ClientAction};
 
 use subscriptions::SubscriptionMap;
 
-const SERVER_TOKEN: mio::Token = mio::Token(0);
+pub const SERVER_TOKEN: mio::Token = mio::Token(0);
 
 pub struct PubsubServer<'a> {
     socket: TcpListener,
@@ -22,10 +22,6 @@ impl<'a> PubsubServer<'a> {
             connections: Slab::new_starting_at(mio::Token(1), 128),
             subscriptions: subscription_map
         }
-    }
-
-    pub fn token() -> mio::Token {
-        SERVER_TOKEN
     }
 }
 

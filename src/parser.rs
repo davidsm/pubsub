@@ -2,7 +2,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use std::io;
 use std::str;
 
-use message::{MessageBuilder, MessageType};
+use message::{MessageBuilder, MessageType, MessageHeader};
 
 macro_rules! try_parse {
     ($expr:expr) => (match $expr {
@@ -40,7 +40,7 @@ pub fn read_u16(b: &[u8]) -> Option<(u16, &[u8])> {
 
 #[derive(PartialEq, Debug)]
 pub enum ParseResult {
-    Completed(MessageBuilder, usize, u16),
+    Completed(MessageHeader, usize, u16),
     Incomplete,
     Error
 }
@@ -108,14 +108,16 @@ pub fn parse(data: &[u8]) -> ParseResult {
                     awaiting = Awaiting::PayloadLen;
                 }
                 else {
-                    return ParseResult::Completed(partial_message, consumed, 0);
+                    return ParseResult::Completed(partial_message.build_header().unwrap(),
+                                                  consumed, 0);
                 }
             },
             Awaiting::PayloadLen => {
                 let (len, rest) = try_parse!(read_u16(remainder)
                                              .ok_or(ParseResult::Incomplete));
                 consumed += remainder.len() - rest.len();
-                return ParseResult::Completed(partial_message, consumed, len);
+                return ParseResult::Completed(partial_message.build_header().unwrap(),
+                                              consumed, len);
             }
         };
     }
@@ -230,16 +232,11 @@ mod test {
     fn test_parse_message_without_payload(bytes: &[u8], expected_type: MessageType, expected_event_name: String,
                                           expected_consumed: usize) {
         let res = parse(&bytes);
-        if let ParseResult::Completed(message_builder, consumed, payload_len) = res {
+        if let ParseResult::Completed(message_header, consumed, payload_len) = res {
             assert_eq!(consumed, expected_consumed);
             assert_eq!(payload_len, 0);
-
-            let build_result = message_builder.build();
-            assert!(build_result.is_ok());
-
-            let message = build_result.unwrap();
-            assert_eq!(message.event_name, expected_event_name);
-            assert_eq!(message.message_type, expected_type);
+            assert_eq!(message_header.event_name, expected_event_name);
+            assert_eq!(message_header.message_type, expected_type);
         }
         else {
             assert!(false, "Result wasn't Completed");
@@ -284,20 +281,15 @@ mod test {
     fn test_parse_message_with_payload(bytes: &[u8], expected_type: MessageType, expected_event_name: String,
                                        expected_payload: &[u8], expected_consumed: usize) {
         let res = parse(bytes);
-        if let ParseResult::Completed(mut message_builder, consumed, payload_len) = res {
+        if let ParseResult::Completed(message_header, consumed, payload_len) = res {
             assert_eq!(consumed, expected_consumed);
             assert_eq!(payload_len as usize, expected_payload.len());
 
             let payload_bytes = &bytes[consumed..consumed + payload_len as usize];
             assert_eq!(payload_bytes, expected_payload);
 
-            message_builder.payload(payload_bytes.to_owned());
-            let build_result = message_builder.build();
-            assert!(build_result.is_ok());
-
-            let message = build_result.unwrap();
-            assert_eq!(message.message_type, expected_type);
-            assert_eq!(message.event_name, expected_event_name);
+            assert_eq!(message_header.message_type, expected_type);
+            assert_eq!(message_header.event_name, expected_event_name);
         }
         else {
             assert!(false, "Result wasn't Completed");

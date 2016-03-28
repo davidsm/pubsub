@@ -21,9 +21,14 @@ impl MessageType {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Message {
+pub struct MessageHeader {
     pub message_type: MessageType,
     pub event_name: String,
+}
+
+#[derive(PartialEq, Debug)]
+pub struct Message {
+    pub header: MessageHeader,
     pub payload: Option<Vec<u8>>
 }
 
@@ -31,9 +36,9 @@ impl Message {
     pub fn to_bytes(self) -> Vec<u8> {
         let mut vec = Vec::<u8>::new();
         // Should be safe to use unwrap, as writing to a Vec should not fail
-        vec.write_u8(self.message_type as u8).unwrap();
-        vec.write_u8(self.event_name.len() as u8).unwrap();
-        vec.extend(self.event_name.into_bytes());
+        vec.write_u8(self.header.message_type as u8).unwrap();
+        vec.write_u8(self.header.event_name.len() as u8).unwrap();
+        vec.extend(self.header.event_name.into_bytes());
         if let Some(payload) = self.payload {
             vec.write_u16::<BigEndian>(payload.len() as u16).unwrap();
             vec.extend(payload);
@@ -73,7 +78,7 @@ impl MessageBuilder {
         self
     }
 
-    pub fn validate(&self) -> Result<(), MessageBuildError> {
+    pub fn validate(&self, only_header: bool) -> Result<(), MessageBuildError> {
         let mut missing_fields = Vec::new();
         if self.message_type.is_none() {
             missing_fields.push("message type");
@@ -89,31 +94,44 @@ impl MessageBuilder {
             return Err(MessageBuildError::TooLargeField(String::from("event name")));
         }
 
-        match self.message_type.as_ref().unwrap() {
-            &MessageType::Publish | &MessageType::Event => {
-                if self.payload.is_none() {
-                    return Err(MessageBuildError::MissingField(String::from("payload")));
-                }
-                if self.payload.as_ref().unwrap().len() > u16::MAX as usize {
-                    return Err(MessageBuildError::TooLargeField(String::from("payload")));
-                }
-            },
-            _ => {
-                if self.payload.is_some() {
-                    return Err(MessageBuildError::InvalidField(
-                        String::from("payload")));
-                }
+        if only_header {
+            return Ok(());
+        }
+
+        if self.message_type.unwrap().expects_payload() {
+            if self.payload.is_none() {
+                return Err(MessageBuildError::MissingField(String::from("payload")));
+            }
+            if self.payload.as_ref().unwrap().len() > u16::MAX as usize {
+                return Err(MessageBuildError::TooLargeField(String::from("payload")));
+            }
+        }
+        else {
+            if self.payload.is_some() {
+                return Err(MessageBuildError::InvalidField(
+                    String::from("payload")));
             }
         }
 
         Ok(())
     }
 
-    pub fn build(self) -> Result<Message, MessageBuildError> {
-        try!(self.validate());
-        let message = Message {
+    pub fn build_header(self) -> Result<MessageHeader, MessageBuildError> {
+        try!(self.validate(true));
+        Ok(MessageHeader {
             message_type: self.message_type.unwrap(),
-            event_name: self.event_name.unwrap(),
+            event_name: self.event_name.unwrap()
+        })
+    }
+
+    pub fn build(self) -> Result<Message, MessageBuildError> {
+        try!(self.validate(false));
+        let header = MessageHeader {
+            message_type: self.message_type.unwrap(),
+            event_name: self.event_name.unwrap()
+        };
+        let message = Message {
+            header: header,
             payload: self.payload
         };
         Ok(message)
@@ -129,13 +147,15 @@ pub enum MessageBuildError {
 
 #[cfg(test)]
 mod test {
-    use super::{Message, MessageBuilder, MessageBuildError, MessageType};
+    use super::{Message, MessageHeader, MessageBuilder, MessageBuildError, MessageType};
 
     #[test]
     fn test_to_bytes() {
         let message = Message {
-            message_type: MessageType::Publish,
-            event_name: "event".to_string(),
+            header: MessageHeader {
+                message_type: MessageType::Publish,
+                event_name: "event".to_string(),
+            },
             payload: Some("a payload here".to_string().into_bytes())
         };
 

@@ -40,7 +40,7 @@ pub fn read_u16(b: &[u8]) -> Option<(u16, &[u8])> {
 
 #[derive(PartialEq, Debug)]
 pub enum ParseResult {
-    Completed(MessageHeader, usize, u16),
+    Completed(MessageHeader, usize, usize),
     Incomplete,
     Error
 }
@@ -117,7 +117,7 @@ pub fn parse(data: &[u8]) -> ParseResult {
                                              .ok_or(ParseResult::Incomplete));
                 consumed += remainder.len() - rest.len();
                 return ParseResult::Completed(partial_message.build_header().unwrap(),
-                                              consumed, len);
+                                              consumed, len as usize);
             }
         };
     }

@@ -67,6 +67,7 @@ impl PubsubClient {
 
     pub fn read(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>) -> ClientAction {
         let action = match self.socket.try_read(&mut self.buffer[self.buffer_state.write_index..]) {
+            Ok(Some(0)) => { return ClientAction::Error },
             Ok(Some(len)) => {
                 self.buffer_state.write_index += len;
                 self.handle_read(len)

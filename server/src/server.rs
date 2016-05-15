@@ -5,17 +5,17 @@ use mio;
 
 use client::{PubsubClient, ClientAction};
 
-use subscriptions::SubscriptionMap;
+use subscriptions::{SubscriptionMap, ClientMap};
 
 pub const SERVER_TOKEN: mio::Token = mio::Token(0);
 
-pub struct PubsubServer<'a> {
+pub struct PubsubServer {
     socket: TcpListener,
     connections: Slab<PubsubClient>,
-    subscriptions: SubscriptionMap<'a>
+    subscriptions: SubscriptionMap
 }
 
-impl<'a> PubsubServer<'a> {
+impl PubsubServer {
     pub fn new(socket: TcpListener, subscription_map: SubscriptionMap) -> PubsubServer {
         PubsubServer {
             socket: socket,
@@ -25,7 +25,7 @@ impl<'a> PubsubServer<'a> {
     }
 }
 
-impl<'a> mio::Handler for PubsubServer<'a> {
+impl mio::Handler for PubsubServer {
     type Timeout = ();
     type Message = ();
 
@@ -58,11 +58,25 @@ impl<'a> mio::Handler for PubsubServer<'a> {
                     .expect("Failed to register new connection with event loop");
 
             },
-
             _ => {
                 match self.connections[token].read(event_loop) {
                     ClientAction::Nothing => {},
-                    _ => unimplemented!()
+                    ClientAction::Subscribe(event) => {
+                        println!("Subscribe to {}", event);
+                        let client_map = self.subscriptions.entry(event)
+                            .or_insert(ClientMap::new());
+                        client_map.insert(token);
+                    },
+                    ClientAction::Unsubscribe(event) => {
+                        println!("Unsubscribe to {}", event);
+                        if let Some(client_map) = self.subscriptions.get_mut(&event) {
+                            client_map.remove(&token);
+                        }
+                    },
+                    ClientAction::Publish(event, payload) => {
+                        println!("Publish {} to {}", String::from_utf8(payload).unwrap(), event);
+                    },
+                    ClientAction::Error => println!("Error!")
                 }
             }
         }

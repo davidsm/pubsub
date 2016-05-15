@@ -1,7 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use mio;
-use client::PubsubClient;
 
-pub type ClientMap<'a> = HashMap<mio::Token, &'a PubsubClient>;
-pub type SubscriptionMap<'a> = HashMap<String, ClientMap<'a>>;
+pub type ClientMap = HashSet<mio::Token>;
+pub type SubscriptionMap = HashMap<String, ClientMap>;

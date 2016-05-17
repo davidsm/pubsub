@@ -30,15 +30,32 @@ enum ReadState {
     Payload(MessageHeader, usize, usize)
 }
 
-struct BufferState {
+struct Buffer {
+    buf: [u8; MAX_PACKET_SIZE],
     read_index: usize,
     write_index: usize
 }
 
-impl BufferState {
+impl Buffer {
+    fn new() -> Buffer {
+        Buffer {
+            buf: [0; MAX_PACKET_SIZE],
+            read_index: 0,
+            write_index: 0
+        }
+    }
+
     fn reset(&mut self) {
         self.read_index = 0;
         self.write_index = 0;
+    }
+
+    fn writable(&mut self) -> &mut [u8] {
+        &mut self.buf[self.write_index..]
+    }
+
+    fn read_bytes(&self, bytes: usize) -> &[u8] {
+        &self.buf[self.read_index..self.read_index + bytes]
     }
 }
 
@@ -46,8 +63,7 @@ pub struct PubsubClient {
     socket: TcpStream,
     token: mio::Token,
     read_state: ReadState,
-    buffer: [u8; MAX_PACKET_SIZE],
-    buffer_state: BufferState
+    buffer: Buffer
 }
 
 impl PubsubClient {
@@ -56,8 +72,7 @@ impl PubsubClient {
             socket: socket,
             token: token,
             read_state: ReadState::Header(0),
-            buffer: [0; MAX_PACKET_SIZE],
-            buffer_state: BufferState { read_index: 0, write_index: 0 }
+            buffer: Buffer::new()
         }
     }
 
@@ -66,10 +81,10 @@ impl PubsubClient {
     }
 
     pub fn read(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>) -> ClientAction {
-        let action = match self.socket.try_read(&mut self.buffer[self.buffer_state.write_index..]) {
+        let action = match self.socket.try_read(self.buffer.writable()) {
             Ok(Some(0)) => { return ClientAction::Error },
             Ok(Some(len)) => {
-                self.buffer_state.write_index += len;
+                self.buffer.write_index += len;
                 self.handle_read(len)
             },
             Ok(None) => {
@@ -93,10 +108,10 @@ impl PubsubClient {
 
         let action = match self.read_state {
             ReadState::Header(in_buffer) => {
-                let parse_result = parse(&self.buffer[..in_buffer + read_len]);
+                let parse_result = parse(self.buffer.read_bytes(in_buffer + read_len));
                 match parse_result {
                     ParseResult::Completed(msg_header, header_len, payload_len) => {
-                        self.buffer_state.read_index = header_len;
+                        self.buffer.read_index = header_len;
 
                         assert!(in_buffer + read_len >= header_len);
                         let remaining_in_buffer = in_buffer + read_len - header_len;
@@ -121,7 +136,7 @@ impl PubsubClient {
             },
             ReadState::Payload(ref header, ref mut in_buffer, payload_len) => {
                 if *in_buffer + read_len >= payload_len {
-                    let payload = &self.buffer[self.buffer_state.read_index..self.buffer_state.read_index + payload_len];
+                    let payload = self.buffer.read_bytes(payload_len);
                     // TODO! Handle extra remaining that is not part of the payload, i.e. next packet
                     packet_complete = true;
                     ClientAction::Publish(header.event_name.clone(), Vec::from(payload))
@@ -150,7 +165,7 @@ impl PubsubClient {
             Publish => {
                 if remaining_in_buffer >= payload_len {
                     // Got the entire payload as well in the same read
-                    let payload = &self.buffer[self.buffer_state.read_index..self.buffer_state.read_index + payload_len];
+                    let payload = self.buffer.read_bytes(payload_len);
                     // TODO! Handle extra remaining that is not part of the payload, i.e. next packet
                     Some(ClientAction::Publish(header.event_name, Vec::from(payload)))
                 }
@@ -166,6 +181,6 @@ impl PubsubClient {
 
     fn on_packet_complete(&mut self) {
         self.read_state = ReadState::Header(0);
-        self.buffer_state.reset();
+        self.buffer.reset();
     }
 }

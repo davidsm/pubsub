@@ -59,24 +59,36 @@ impl mio::Handler for PubsubServer {
 
             },
             _ => {
-                match self.connections[token].read(event_loop) {
-                    ClientAction::Nothing => {},
-                    ClientAction::Subscribe(event) => {
-                        println!("Subscribe to {}", event);
-                        let client_map = self.subscriptions.entry(event)
-                            .or_insert(ClientMap::new());
-                        client_map.insert(token);
-                    },
-                    ClientAction::Unsubscribe(event) => {
-                        println!("Unsubscribe to {}", event);
-                        if let Some(client_map) = self.subscriptions.get_mut(&event) {
-                            client_map.remove(&token);
+                let mut action = self.connections[token].read(event_loop);
+                // Might get more than one packet in a read, so loop
+                // until there are no more complete packets
+                loop {
+                    match action {
+                        ClientAction::Nothing => {
+                            println!("No action. Break read loop");
+                            break;
+                        },
+                        ClientAction::Subscribe(event) => {
+                            println!("Subscribe to {}", event);
+                            let client_map = self.subscriptions.entry(event)
+                                .or_insert(ClientMap::new());
+                            client_map.insert(token);
+                        },
+                        ClientAction::Unsubscribe(event) => {
+                            println!("Unsubscribe to {}", event);
+                            if let Some(client_map) = self.subscriptions.get_mut(&event) {
+                                client_map.remove(&token);
+                            }
+                        },
+                        ClientAction::Publish(event, payload) => {
+                            println!("Publish {} to {}", String::from_utf8(payload).unwrap(), event);
+                        },
+                        ClientAction::Error => {
+                            println!("Error!");
+                            break;
                         }
-                    },
-                    ClientAction::Publish(event, payload) => {
-                        println!("Publish {} to {}", String::from_utf8(payload).unwrap(), event);
-                    },
-                    ClientAction::Error => println!("Error!")
+                    }
+                    action = self.connections[token].handle_read(0);
                 }
             }
         }

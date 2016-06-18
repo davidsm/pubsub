@@ -50,12 +50,28 @@ impl Buffer {
         self.write_index = 0;
     }
 
+    fn reshuffle(&mut self, remaining_bytes: usize) {
+        let mut i = 0;
+        let start = self.write_index - remaining_bytes;
+        for j in start..self.write_index {
+            self.buf[i] = self.buf[j];
+            i += 1;
+        }
+        self.read_index = 0;
+        self.write_index = remaining_bytes;
+    }
+
     fn writable(&mut self) -> &mut [u8] {
         &mut self.buf[self.write_index..]
     }
 
     fn read_bytes(&self, bytes: usize) -> &[u8] {
         &self.buf[self.read_index..self.read_index + bytes]
+    }
+
+    fn unused_bytes(&self) -> usize {
+        assert!(self.write_index >= self.read_index);
+        self.write_index - self.read_index
     }
 }
 
@@ -84,6 +100,7 @@ impl PubsubClient {
         let action = match self.socket.try_read(self.buffer.writable()) {
             Ok(Some(0)) => { return ClientAction::Error },
             Ok(Some(len)) => {
+                println!("Read {} bytes", len);
                 self.buffer.write_index += len;
                 self.handle_read(len)
             },
@@ -103,12 +120,16 @@ impl PubsubClient {
         unimplemented!();
     }
 
-    fn handle_read(&mut self, read_len: usize) -> ClientAction {
+    pub fn handle_read(&mut self, read_len: usize) -> ClientAction {
         let mut packet_complete = false;
 
         let action = match self.read_state {
             ReadState::Header(in_buffer) => {
-                let parse_result = parse(self.buffer.read_bytes(in_buffer + read_len));
+                let readable_bytes = in_buffer + read_len;
+                if readable_bytes == 0 {
+                    return ClientAction::Nothing;
+                }
+                let parse_result = parse(self.buffer.read_bytes(readable_bytes));
                 match parse_result {
                     ParseResult::Completed(msg_header, header_len, payload_len) => {
                         self.buffer.read_index = header_len;
@@ -136,10 +157,10 @@ impl PubsubClient {
             },
             ReadState::Payload(ref header, ref mut in_buffer, payload_len) => {
                 if *in_buffer + read_len >= payload_len {
-                    let payload = self.buffer.read_bytes(payload_len);
-                    // TODO! Handle extra remaining that is not part of the payload, i.e. next packet
+                    let payload = Vec::from(self.buffer.read_bytes(payload_len));
+                    self.buffer.read_index += payload_len;
                     packet_complete = true;
-                    ClientAction::Publish(header.event_name.clone(), Vec::from(payload))
+                    ClientAction::Publish(header.event_name.clone(), payload)
                 }
                 else {
                     *in_buffer += read_len;
@@ -165,9 +186,9 @@ impl PubsubClient {
             Publish => {
                 if remaining_in_buffer >= payload_len {
                     // Got the entire payload as well in the same read
-                    let payload = self.buffer.read_bytes(payload_len);
-                    // TODO! Handle extra remaining that is not part of the payload, i.e. next packet
-                    Some(ClientAction::Publish(header.event_name, Vec::from(payload)))
+                    let payload = Vec::from(self.buffer.read_bytes(payload_len));
+                    self.buffer.read_index += payload_len;
+                    Some(ClientAction::Publish(header.event_name, payload))
                 }
                 else {
                     self.read_state = ReadState::Payload(header, remaining_in_buffer, payload_len);
@@ -180,7 +201,13 @@ impl PubsubClient {
     }
 
     fn on_packet_complete(&mut self) {
-        self.read_state = ReadState::Header(0);
-        self.buffer.reset();
+        let unused_bytes = self.buffer.unused_bytes();
+        if unused_bytes > 0 {
+            self.buffer.reshuffle(unused_bytes);
+        }
+        else {
+            self.buffer.reset();
+        }
+        self.read_state = ReadState::Header(unused_bytes);
     }
 }

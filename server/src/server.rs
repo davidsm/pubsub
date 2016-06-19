@@ -23,6 +23,71 @@ impl PubsubServer {
             subscriptions: subscription_map
         }
     }
+
+    fn on_client_connection(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>) {
+        let client_socket = match self.socket.accept() {
+            Err(e) => {
+                println!("{}", e);
+                return;
+            },
+            Ok(None) => {
+                println!("Couldn't accept connection (None)");
+                return;
+            }
+            Ok(Some((socket, address))) => {
+                println!("Got a connection from {}", address);
+                socket
+            }
+        };
+
+        let token = self.connections.insert_with(|token| {
+            PubsubClient::new(client_socket, token)
+        }).expect("Failed to insert new connection");
+
+        event_loop.register(self.connections[token].socket(), token,
+                            EventSet::readable(),
+                            PollOpt::edge() | PollOpt::oneshot())
+            .expect("Failed to register new connection with event loop");
+
+    }
+
+    fn on_client_readable(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>, token: mio::Token) {
+        let mut action = self.connections[token].read(event_loop);
+        // Might get more than one packet in a read, so loop
+        // until there are no more complete packets
+        loop {
+            match action {
+                ClientAction::Nothing => {
+                    println!("No action. Break read loop");
+                    break;
+                },
+                ClientAction::Subscribe(event) => {
+                    println!("Subscribe to {}", event);
+                    let client_map = self.subscriptions.entry(event)
+                        .or_insert(ClientMap::new());
+                    client_map.insert(token);
+                },
+                ClientAction::Unsubscribe(event) => {
+                    println!("Unsubscribe to {}", event);
+                    if let Some(client_map) = self.subscriptions.get_mut(&event) {
+                        client_map.remove(&token);
+                    }
+                },
+                ClientAction::Publish(event, payload) => {
+                    println!("Publish {} to {}", String::from_utf8(payload).unwrap(), event);
+                },
+                ClientAction::Error => {
+                    println!("Error!");
+                    break;
+                }
+            }
+            action = self.connections[token].handle_read(0);
+        }
+    }
+
+    fn on_client_writable(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>, token: mio::Token) {
+
+    }
 }
 
 impl mio::Handler for PubsubServer {
@@ -33,62 +98,14 @@ impl mio::Handler for PubsubServer {
              token: mio::Token, events: mio::EventSet) {
         match token {
             SERVER_TOKEN => {
-                let client_socket = match self.socket.accept() {
-                    Err(e) => {
-                        println!("{}", e);
-                        return;
-                    },
-                    Ok(None) => {
-                        println!("Couldn't accept connection (None)");
-                        return;
-                    }
-                    Ok(Some((socket, address))) => {
-                        println!("Got a connection from {}", address);
-                        socket
-                    }
-                };
-
-                let token = self.connections.insert_with(|token| {
-                    PubsubClient::new(client_socket, token)
-                }).expect("Failed to insert new connection");
-
-                event_loop.register(self.connections[token].socket(), token,
-                                    EventSet::readable(),
-                                    PollOpt::edge() | PollOpt::oneshot())
-                    .expect("Failed to register new connection with event loop");
-
+                self.on_client_connection(event_loop);
             },
             _ => {
-                let mut action = self.connections[token].read(event_loop);
-                // Might get more than one packet in a read, so loop
-                // until there are no more complete packets
-                loop {
-                    match action {
-                        ClientAction::Nothing => {
-                            println!("No action. Break read loop");
-                            break;
-                        },
-                        ClientAction::Subscribe(event) => {
-                            println!("Subscribe to {}", event);
-                            let client_map = self.subscriptions.entry(event)
-                                .or_insert(ClientMap::new());
-                            client_map.insert(token);
-                        },
-                        ClientAction::Unsubscribe(event) => {
-                            println!("Unsubscribe to {}", event);
-                            if let Some(client_map) = self.subscriptions.get_mut(&event) {
-                                client_map.remove(&token);
-                            }
-                        },
-                        ClientAction::Publish(event, payload) => {
-                            println!("Publish {} to {}", String::from_utf8(payload).unwrap(), event);
-                        },
-                        ClientAction::Error => {
-                            println!("Error!");
-                            break;
-                        }
-                    }
-                    action = self.connections[token].handle_read(0);
+                if events.is_readable() {
+                    self.on_client_readable(event_loop, token);
+                }
+                if events.is_writable() {
+                    self.on_client_writable(event_loop, token);
                 }
             }
         }

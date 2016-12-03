@@ -71,6 +71,7 @@ impl PubsubServer {
                     println!("Unsubscribe to {}", event);
                     if let Some(client_map) = self.subscriptions.get_mut(&event) {
                         client_map.remove(&token);
+                        // TODO: Remove key if no subscriptions left
                     }
                 },
                 ClientAction::Publish(event, payload) => {

@@ -23,11 +23,11 @@ pub struct PubsubServer {
 }
 
 impl PubsubServer {
-    pub fn new(socket: TcpListener, subscription_map: SubscriptionMap) -> PubsubServer {
+    pub fn new(socket: TcpListener) -> PubsubServer {
         PubsubServer {
             socket: socket,
             connections: Slab::new_starting_at(mio::Token(1), 128),
-            subscriptions: subscription_map,
+            subscriptions: SubscriptionMap::new(),
             pending_events: PendingEvents::new()
         }
     }

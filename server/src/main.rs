@@ -8,6 +8,7 @@ mod subscriptions;
 use subscriptions::SubscriptionMap;
 
 mod client;
+mod pending_event;
 
 use mio::{EventLoop, EventSet, PollOpt};
 use mio::tcp::TcpListener;

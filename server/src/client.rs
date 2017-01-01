@@ -1,13 +1,17 @@
 use mio;
 use mio::tcp::{TcpStream};
-use mio::{EventSet, PollOpt, TryRead};
+use mio::{EventSet, PollOpt, TryRead, TryWrite};
 
 use pubsub::message::MessageHeader;
 use pubsub::parser::{parse, ParseResult};
 
-use server::PubsubServer;
+use server::{EventLoop};
+
+use pending_event::{EventId, PendingEvents};
 
 use std::{u8, u16};
+
+use std::collections::VecDeque;
 
 
 const MAX_PACKET_SIZE: usize =
@@ -75,10 +79,44 @@ impl Buffer {
     }
 }
 
+struct WriteQueue {
+    queue: VecDeque<EventId>,
+    write_index: usize
+}
+
+impl WriteQueue {
+    fn new() -> WriteQueue {
+        WriteQueue {
+            queue: VecDeque::new(),
+            write_index: 0
+        }
+    }
+
+    fn add_event(&mut self, event_id: EventId) {
+        self.queue.push_back(event_id);
+    }
+
+    fn current_event_id(&self) -> EventId {
+        *self.queue.get(0).unwrap()
+    }
+
+    fn has_events_pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    fn finish_current_event(&mut self) -> EventId {
+        let event_id = self.queue.pop_front()
+            .expect("Called finish_current_event with no events left");
+        self.write_index = 0;
+        event_id
+    }
+}
+
 pub struct PubsubClient {
     socket: TcpStream,
     token: mio::Token,
     read_state: ReadState,
+    write_queue: WriteQueue,
     buffer: Buffer
 }
 
@@ -88,6 +126,7 @@ impl PubsubClient {
             socket: socket,
             token: token,
             read_state: ReadState::Header(0),
+            write_queue: WriteQueue::new(),
             buffer: Buffer::new()
         }
     }
@@ -96,7 +135,16 @@ impl PubsubClient {
         &self.socket
     }
 
-    pub fn read(&mut self, event_loop: &mut mio::EventLoop<PubsubServer>) -> ClientAction {
+    fn reregister(&self, event_loop: &mut EventLoop) {
+        let mut event_set = EventSet::readable();
+        if self.write_queue.has_events_pending() {
+            event_set = event_set | EventSet::writable();
+        }
+        event_loop.reregister(&self.socket, self.token, event_set,
+                              PollOpt::edge() | PollOpt::oneshot()).unwrap();
+    }
+
+    pub fn read(&mut self, event_loop: &mut EventLoop) -> ClientAction {
         let action = match self.socket.try_read(self.buffer.writable()) {
             Ok(Some(0)) => { return ClientAction::Error },
             Ok(Some(len)) => {
@@ -111,13 +159,37 @@ impl PubsubClient {
             },
             Err(_) => { return ClientAction::Error; }
         };
-        event_loop.reregister(&self.socket, self.token, EventSet::readable(),
-                              PollOpt::edge() | PollOpt::oneshot()).unwrap();
+        self.reregister(event_loop);
         action
     }
 
-    pub fn write() {
-        unimplemented!();
+    pub fn write(&mut self, event_loop: &mut EventLoop, pending_events: &mut PendingEvents) {
+        // Ugly way of limiting the lifetime of "data"
+        // in order to be able to mutably borrow "pending_events" further down
+        let (write_res, data_len) = {
+            let data = match pending_events.get_event_data(self.write_queue.current_event_id()) {
+                Some(d) => &d[self.write_queue.write_index..],
+                None => {
+                    println!("Tried to get data for non existing event in write! Should not happen");
+                    return;
+                }
+            };
+            (self.socket.try_write(data), data.len())
+        };
+
+        match write_res {
+            Ok(Some(0)) => unimplemented!(),
+            Ok(Some(len)) => {
+                self.write_queue.write_index += len;
+                if self.write_queue.write_index >= data_len {
+                    let event_id = self.write_queue.finish_current_event();
+                    pending_events.finish_event(event_id);
+                }
+            },
+            Ok(None) => unimplemented!(),
+            Err(_) => unimplemented!()
+        }
+        self.reregister(event_loop);
     }
 
     pub fn handle_read(&mut self, read_len: usize) -> ClientAction {
@@ -174,6 +246,11 @@ impl PubsubClient {
         }
 
         action
+    }
+
+    pub fn publish(&mut self, event_id: EventId, event_loop: &mut EventLoop) {
+        self.write_queue.add_event(event_id);
+        self.reregister(event_loop);
     }
 
     fn on_header(&mut self, header: MessageHeader, remaining_in_buffer: usize, payload_len: usize)

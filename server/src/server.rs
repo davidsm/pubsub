@@ -103,6 +103,8 @@ impl PubsubServer {
                 },
                 ClientAction::Error => {
                     println!("Error!");
+                    self.connections.remove(token);
+                    // TODO: Remove subscriptions also
                     break;
                 }
             }

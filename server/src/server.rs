@@ -103,8 +103,7 @@ impl PubsubServer {
                 },
                 ClientAction::Error => {
                     println!("Error!");
-                    self.connections.remove(token);
-                    // TODO: Remove subscriptions also
+                    self.disconnect_client(token);
                     break;
                 }
             }
@@ -114,6 +113,15 @@ impl PubsubServer {
 
     fn on_client_writable(&mut self, event_loop: &mut EventLoop, token: mio::Token) {
         self.connections[token].write(event_loop, &mut self.pending_events);
+    }
+
+    fn disconnect_client(&mut self, token: mio::Token) {
+        self.connections.remove(token);
+
+        // A bit inefficient...
+        for clients in self.subscriptions.values_mut() {
+            clients.remove(&token);
+        }
     }
 }
 

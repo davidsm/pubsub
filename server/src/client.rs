@@ -153,8 +153,7 @@ impl PubsubClient {
                 self.handle_read(len)
             },
             Ok(None) => {
-                // TODO: what exactly does this imply?
-                println!("Got None while reading");
+                // Would Block. Do nothing and simply try again later
                 ClientAction::Nothing
             },
             Err(_) => { return ClientAction::Error; }

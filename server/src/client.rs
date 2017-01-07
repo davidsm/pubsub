@@ -162,7 +162,7 @@ impl PubsubClient {
         action
     }
 
-    pub fn write(&mut self, event_loop: &mut EventLoop, pending_events: &mut PendingEvents) {
+    pub fn write(&mut self, event_loop: &mut EventLoop, pending_events: &mut PendingEvents) -> Result<(), ()> {
         // Ugly way of limiting the lifetime of "data"
         // in order to be able to mutably borrow "pending_events" further down
         let (write_res, data_len) = {
@@ -170,14 +170,15 @@ impl PubsubClient {
                 Some(d) => &d[self.write_queue.write_index..],
                 None => {
                     println!("Tried to get data for non existing event in write! Should not happen");
-                    return;
+                    return Err(());
                 }
             };
             (self.socket.try_write(data), data.len())
         };
 
         match write_res {
-            Ok(Some(0)) => unimplemented!(),
+            // Is this OK or not, i.e. should the client be disconnected?
+            Ok(Some(0)) => { return Err(()) },
             Ok(Some(len)) => {
                 self.write_queue.write_index += len;
                 if self.write_queue.write_index >= data_len {
@@ -185,10 +186,12 @@ impl PubsubClient {
                     pending_events.finish_event(event_id);
                 }
             },
-            Ok(None) => unimplemented!(),
-            Err(_) => unimplemented!()
+            // Would block. Try again later
+            Ok(None) => {}
+            Err(_) => { return Err(()) }
         }
         self.reregister(event_loop);
+        Ok(())
     }
 
     pub fn handle_read(&mut self, read_len: usize) -> ClientAction {

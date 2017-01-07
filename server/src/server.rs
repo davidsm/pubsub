@@ -112,7 +112,10 @@ impl PubsubServer {
     }
 
     fn on_client_writable(&mut self, event_loop: &mut EventLoop, token: mio::Token) {
-        self.connections[token].write(event_loop, &mut self.pending_events);
+        match self.connections[token].write(event_loop, &mut self.pending_events) {
+            Ok(_) => {},
+            Err(_) => { self.disconnect_client(token); }
+        };
     }
 
     fn disconnect_client(&mut self, token: mio::Token) {

@@ -182,8 +182,7 @@ impl PubsubClient {
             Ok(Some(len)) => {
                 self.write_queue.write_index += len;
                 if self.write_queue.write_index >= data_len {
-                    let event_id = self.write_queue.finish_current_event();
-                    pending_events.finish_event(event_id);
+                    self.finish_event(pending_events);
                 }
             },
             // Would block. Try again later
@@ -288,5 +287,16 @@ impl PubsubClient {
             self.buffer.reset();
         }
         self.read_state = ReadState::Header(unused_bytes);
+    }
+
+    fn finish_event(&mut self, pending_events: &mut PendingEvents) {
+        let event_id = self.write_queue.finish_current_event();
+        pending_events.finish_event(event_id);
+    }
+
+    pub fn clear_events(&mut self, pending_events: &mut PendingEvents) {
+        while self.write_queue.has_events_pending() {
+            self.finish_event(pending_events)
+        }
     }
 }

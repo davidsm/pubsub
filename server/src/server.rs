@@ -119,12 +119,16 @@ impl PubsubServer {
     }
 
     fn disconnect_client(&mut self, token: mio::Token) {
-        self.connections.remove(token);
+        // Remove the client from pending events queue
+        self.connections[token].clear_events(&mut self.pending_events);
 
         // A bit inefficient...
+        // Unsubscribe the client from all events
         for clients in self.subscriptions.values_mut() {
             clients.remove(&token);
         }
+
+        self.connections.remove(token);
     }
 }
 

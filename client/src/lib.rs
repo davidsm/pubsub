@@ -4,6 +4,8 @@ extern crate futures;
 
 mod codec;
 
+pub use codec::PubsubCodec;
+
 #[cfg(test)]
 mod tests {
     #[test]

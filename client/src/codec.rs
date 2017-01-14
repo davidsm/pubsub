@@ -52,6 +52,7 @@ impl Codec for PubsubCodec {
     }
 
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        Ok(buf.extend(msg.to_bytes()))
+        buf.extend(msg.to_bytes());
+        Ok(())
     }
 }

@@ -1,0 +1,11 @@
+[package]
+name = "pubsub-client"
+version = "0.1.0"
+authors = ["david <david.smitmanis@gmail.com>"]
+
+[dependencies]
+tokio-core = "0.1"
+futures = "0.1.7"
+
+[dependencies.pubsub]
+path = "../"

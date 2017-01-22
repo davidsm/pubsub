@@ -97,7 +97,7 @@ impl WriteQueue {
     }
 
     fn current_event_id(&self) -> EventId {
-        *self.queue.get(0).unwrap()
+        self.queue[0]
     }
 
     fn has_events_pending(&self) -> bool {

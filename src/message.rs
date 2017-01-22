@@ -33,7 +33,7 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn to_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Vec<u8> {
         let mut vec = Vec::<u8>::new();
         // Should be safe to use unwrap, as writing to a Vec should not fail
         vec.write_u8(self.header.message_type as u8).unwrap();
@@ -47,7 +47,7 @@ impl Message {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Default)]
 pub struct MessageBuilder {
     message_type: Option<MessageType>,
     event_name: Option<String>,
@@ -86,7 +86,7 @@ impl MessageBuilder {
         if self.event_name.is_none() {
             missing_fields.push("event name")
         }
-        if missing_fields.len() != 0 {
+        if !missing_fields.is_empty() {
             return Err(MessageBuildError::MissingField(missing_fields.join(", ")));
         }
 
@@ -106,11 +106,9 @@ impl MessageBuilder {
                 return Err(MessageBuildError::TooLargeField(String::from("payload")));
             }
         }
-        else {
-            if self.payload.is_some() {
-                return Err(MessageBuildError::InvalidField(
-                    String::from("payload")));
-            }
+        else if self.payload.is_some() {
+            return Err(MessageBuildError::InvalidField(
+                String::from("payload")));
         }
 
         Ok(())
@@ -150,7 +148,7 @@ mod test {
     use super::{Message, MessageHeader, MessageBuilder, MessageBuildError, MessageType};
 
     #[test]
-    fn test_to_bytes() {
+    fn test_into_bytes() {
         let message = Message {
             header: MessageHeader {
                 message_type: MessageType::Publish,
@@ -168,7 +166,7 @@ mod test {
             0x6c, 0x6f, 0x61, 0x64, 0x20,
             0x68, 0x65, 0x72, 0x65
                 ];
-        assert_eq!(message.to_bytes(), expected_bytes);
+        assert_eq!(message.into_bytes(), expected_bytes);
     }
 
     #[test]

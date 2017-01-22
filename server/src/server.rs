@@ -72,7 +72,7 @@ impl PubsubServer {
                 ClientAction::Subscribe(event) => {
                     println!("Subscribe to {}", event);
                     let client_map = self.subscriptions.entry(event)
-                        .or_insert(ClientMap::new());
+                        .or_insert_with(ClientMap::new);
                     client_map.insert(token);
                 },
                 ClientAction::Unsubscribe(event) => {
@@ -90,7 +90,7 @@ impl PubsubServer {
                             .event_name(event)
                             .payload(payload);
                         let message_data = match builder.build() {
-                            Ok(msg) => msg.to_bytes(),
+                            Ok(msg) => msg.into_bytes(),
                             Err(_) => break
                         };
 

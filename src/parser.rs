@@ -124,8 +124,8 @@ pub fn parse(data: &[u8]) -> ParseResult {
     ParseResult::Incomplete
 }
 
-fn read_message_type<'b>(b: &'b [u8])
-                         -> Result<(MessageType, &'b [u8]), ParserError> {
+fn read_message_type(b: &[u8])
+                     -> Result<(MessageType, &[u8]), ParserError> {
     match read_u8(b) {
         Some((val, remainder)) => {
             let message_type = try!(match_message_type(val));
@@ -155,8 +155,8 @@ fn match_message_type(val: u8) -> Result<MessageType, ParserError> {
     }
 }
 
-fn read_event_name<'b>(b: &'b [u8], event_name_len: u8)
-                       -> Result<(String, &'b [u8]), ParserError> {
+fn read_event_name(b: &[u8], event_name_len: u8)
+                   -> Result<(String, &[u8]), ParserError> {
     let (event_name_bytes, rest) = try!(take_n(event_name_len as usize, b)
                                         .ok_or(ParserError::InsufficientData));
     let event_name = try!(str::from_utf8(event_name_bytes)

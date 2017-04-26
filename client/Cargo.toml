@@ -5,7 +5,9 @@ authors = ["david <david.smitmanis@gmail.com>"]
 
 [dependencies]
 tokio-core = "0.1"
-futures = "0.1.7"
+tokio-io = "0.1"
+futures = "0.1.11"
+bytes = "0.4"
 
 [dependencies.pubsub]
 path = "../"

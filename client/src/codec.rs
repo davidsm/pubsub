@@ -1,4 +1,5 @@
-use tokio_core::io::{Codec, EasyBuf};
+use tokio_io::codec::{Encoder, Decoder};
+use bytes::BytesMut;
 use pubsub::message::{Message, MessageHeader, MessageBuilder};
 use pubsub::parser::{parse, ParseResult};
 
@@ -22,17 +23,17 @@ fn build_message(header: MessageHeader, payload: Option<Vec<u8>>) -> io::Result<
 
 pub struct PubsubCodec;
 
-impl Codec for PubsubCodec {
-    type In = Message;
-    type Out = Message;
+impl Decoder for PubsubCodec {
+    type Item = Message;
+    type Error = io::Error;
 
-    fn decode(&mut self, buf: &mut EasyBuf) -> io::Result<Option<Self::In>> {
-        match parse(buf.as_slice()) {
+    fn decode(&mut self, buf: &mut BytesMut) -> io::Result<Option<Self::Item>> {
+        match parse(&buf) {
             ParseResult::Completed(header, consumed, payload_len) => {
                 if header.message_type.expects_payload() {
                     if buf.len() >= consumed + payload_len {
-                        buf.drain_to(consumed);
-                        let payload = buf.drain_to(payload_len).as_slice().to_vec();
+                        buf.split_to(consumed);
+                        let payload = buf.split_to(payload_len).to_vec();
                         Ok(Some(try!(build_message(header, Some(payload)))))
                     }
                     else {
@@ -40,7 +41,7 @@ impl Codec for PubsubCodec {
                     }
                 }
                 else {
-                    buf.drain_to(consumed);
+                    buf.split_to(consumed);
                     Ok(Some(try!(build_message(header, None))))
                 }
             },
@@ -50,8 +51,13 @@ impl Codec for PubsubCodec {
                                                      "invalid message"))
         }
     }
+}
 
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
+impl Encoder for PubsubCodec {
+    type Item = Message;
+    type Error = io::Error;
+
+    fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
         buf.extend(msg.into_bytes());
         Ok(())
     }
